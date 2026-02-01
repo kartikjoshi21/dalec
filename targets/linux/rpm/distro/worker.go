@@ -18,18 +18,12 @@ import (
 // TODO: can this be refactored to share code?
 func (cfg *Config) HandleWorker(ctx context.Context, client gwclient.Client) (*gwclient.Result, error) {
 	return frontend.BuildWithPlatform(ctx, client, func(ctx context.Context, client gwclient.Client, platform *ocispecs.Platform, spec *dalec.Spec, targetKey string) (gwclient.Reference, *dalec.DockerImageSpec, error) {
-		var normPlatform *ocispecs.Platform
-                if platform != nil {
-                        p := platforms.Normalize(*platform)
-                        normPlatform = &p
-                }
-
-		sOpt, err := frontend.SourceOptFromClient(ctx, client, normPlatform)
+		sOpt, err := frontend.SourceOptFromClient(ctx, client, platform)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		pc := dalec.Platform(normPlatform)
+		pc := dalec.Platform(platform)
                 buildPlat := nativeExecutorPlatform(client)
 		st := cfg.workerWithBuildPlatform(sOpt, buildPlat, pc, frontend.IgnoreCache(client), dalec.ProgressGroup("Handle worker"))
 
@@ -52,7 +46,7 @@ func (cfg *Config) HandleWorker(ctx context.Context, client gwclient.Client) (*g
 
 		_, _, dt, err := client.ResolveImageConfig(ctx, cfg.ImageRef, sourceresolver.Opt{
 			ImageOpt: &sourceresolver.ResolveImageOpt{
-				Platform: normPlatform,
+				Platform: platform,
 			},
 		})
 		if err != nil {
@@ -68,8 +62,8 @@ func (cfg *Config) HandleWorker(ctx context.Context, client gwclient.Client) (*g
 }
 
 // nativeExecutorPlatform returns the BuildKit worker's native (executor) platform.
-// Do NOT use platforms.DefaultSpec() for this: the frontend image may be running as the
-// TARGET platform (multi-arch frontend), which would make DefaultSpec() lie.
+// In most cases this matches platforms.DefaultSpec(), but using the worker-advertised
+// platform avoids assuming the frontend container's platform is the executor's.
 func nativeExecutorPlatform(client gwclient.Client) ocispecs.Platform {
         bo := client.BuildOpts()
         for _, w := range bo.Workers {
@@ -128,7 +122,7 @@ func (cfg *Config) workerWithBuildPlatform(sOpt dalec.SourceOpts, buildPlat ocis
 		}
 	}
 
-	targetPlat := platforms.Normalize(buildPlat)
+	targetPlat := buildPlat
         if sOpt.TargetPlatform != nil {
                 targetPlat = platforms.Normalize(*sOpt.TargetPlatform)
         }
@@ -159,7 +153,7 @@ func (cfg *Config) workerWithBuildPlatform(sOpt dalec.SourceOpts, buildPlat ocis
                 return dalec.ErrorState(llb.Scratch(), err)
         }
 
-        buildBase := frontend.GetBaseImage(buildSOpt, cfg.ImageRef, buildOpts...).Platform(buildPlat)
+	buildBase := frontend.GetBaseImage(buildSOpt, cfg.ImageRef, buildOpts...).Platform(buildPlat)
         const rootfsMount = "/tmp/dalec/rootfs"
 
         es := buildBase.Run(
@@ -175,7 +169,7 @@ func (cfg *Config) SysextWorker(sOpts dalec.SourceOpts, opts ...llb.ConstraintsO
 	buildPlat := platforms.Normalize(platforms.DefaultSpec())
         worker := cfg.workerWithBuildPlatform(sOpts, buildPlat, opts...)
 
-        targetPlat := platforms.Normalize(buildPlat)
+        targetPlat := buildPlat
         if sOpts.TargetPlatform != nil {
                targetPlat = platforms.Normalize(*sOpts.TargetPlatform)
         }
